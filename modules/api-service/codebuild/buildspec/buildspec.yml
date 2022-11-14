@@ -1,0 +1,82 @@
+version: 0.2
+# env:
+#   secrets-manager:
+#     APIDATABASE_SECRET: arn:aws:secretsmanager:ap-northeast-2:165977844260:secret:apidatabaseAuroraSecret-VuzGmTlT58Va-Et329o
+#   parameter-store:
+#     APOLLO_KEY: /copilot/bhplf/dev/secrets/APOLLO_KEY
+#     APOLLO_GRAPH_REF: /copilot/bhplf/dev/secrets/APOLLO_GRAPH_REF
+#     COGNITO_USER_POOL_ID: /copilot/bhplf/dev/secrets/COGNITO_USER_POOL_ID
+#     COGNITO_CLIENT_ID: /copilot/bhplf/dev/secrets/COGNITO_CLIENT_ID
+phases:
+  install:
+    runtime-versions:
+      docker: 20
+      nodejs: 16
+  pre_build:
+    commands:
+      - echo Logging in to Amazon ECR...
+      - aws --version
+      - $(aws ecr get-login --no-include-email --region ${region})
+      - REPOSITORY_URI=${ecr_api_repository_url}
+      - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-8)
+      - IMAGE_TAG=$${COMMIT_HASH}
+  build:
+    on-failure: ABORT
+    commands:
+      - echo "Make DATABASEURL env var for prisma"
+      - echo "DATABASE_URL=$DATABASE_URL" > .env
+      # https://stackoverflow.com/questions/55890275/aws-codebuild-does-not-work-with-yarn-workspaces
+      - yarn config set cache-folder /root/.yarn-cache
+      - echo "Build a service"
+      - yarn install --frozen-lockfile
+      # Prisma generate and GraphQL Schema generate
+      - yarn generate
+      # Type Check
+      - yarn typecheck
+      # Unit Test
+      - NODE_ENV=test yarn test --collectCoverage
+      # TypeScript build
+      - yarn build
+      # Database migration by using Prisma Engine. DATABASE_URL should be specified in environment.
+      - yarn prisma migrate deploy
+      # GraphQL schema send to Apollo Studio
+      - yarn rover subgraph publish ${apollo_graph_ref} --name mystack --schema ./src/generated/schema.graphql --routing-url ${api_endpoint_url}
+      # Build Docker image
+      - echo Build started on `date`
+      - echo Pull previous docker image
+      - docker pull ${ecr_api_repository_url}:latest || true
+      - echo Building the Docker image...
+      - docker build --cache-from ${ecr_api_repository_url}:latest -t ${api_repository_name} .
+      - docker tag ${api_repository_name}:latest ${ecr_api_repository_url}:latest
+
+      # - docker build -t ${api_repository_name}:latest .
+      # - docker tag ${api_repository_name}:latest ${ecr_api_repository_url}:$${IMAGE_TAG}
+  post_build:
+    on-failure: ABORT
+    commands:
+      - echo Pushing the Docker images...
+      - docker push ${ecr_api_repository_url}:latest
+      # - docker push ${ecr_api_repository_url}:$${IMAGE_TAG}
+      - echo Writing image definitions file...
+      - aws ecs describe-task-definition --task-definition ${task_definition} | jq '.taskDefinition' > taskdef.json
+      - envsubst < appspec_template.yaml > appspec.yaml
+      - printf '[{"name":"api","imageUri":"%s"}]' ${ecr_api_repository_url}:latest > apiimagedefinitions.json
+artifacts:
+  files:
+    - appspec.yaml
+    - apiimagedefinitions.json
+    - taskdef.json
+cache:
+  paths:
+    - "node_modules/**/*"
+    - "/root/.yarn-cache/**/*"
+# reports:
+#   jest_reports:
+#     files:
+#       - testResult.xml
+#     file-format: JUNITXML
+#     base-directory: .report
+#   coverage_reports:
+#     files:
+#       - coverage/clover.xml
+#     file-format: CLOVERXML
