@@ -1,3 +1,5 @@
+[![tfsec](https://github.com/eunchurn/terraform-ecs-multiple-service-codeploy-blue-green/actions/workflows/tfsec.yml/badge.svg)](https://github.com/eunchurn/terraform-ecs-multiple-service-codeploy-blue-green/actions/workflows/tfsec.yml)
+
 # Terraform ECS Multiple Fargate APIs(Prisma GraphQL API, SuperTokens) Blue-Green Deployment
 
 [Blog post](https://www.eunchurn.com/blog/development/2022-11-14-tWIL)
